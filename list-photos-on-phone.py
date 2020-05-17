@@ -110,7 +110,7 @@ def get_destination_for_phone(localdir, iphone_name):
     :param localdir: The directory path to the yaml file.
     :param iphone_name: The iPhone's name
     """
-    names = yaml.load(file(os.path.join(localdir, "name-to-path.yaml"), "r"))
+    names = yaml.load(open(os.path.join(localdir, "name-to-path.yaml"), "r"))
     for k in names:
         if k in iphone_name.lower():
             v_print("Local photo directory: %s" % (names[k], ))
