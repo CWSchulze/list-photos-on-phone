@@ -8,75 +8,60 @@ import time
 from argparse import ArgumentParser
 from win32com.shell import shell, shellcon
 import pywintypes
-from collections import defaultdict
-import yaml
 import pythoncom
 from win32com import storagecon
+import logging
+logger = logging.getLogger("list-photos")
+logging.basicConfig()
 
 __author__ = "David Blume"
 __copyright__ = "Copyright 2014, David Blume"
 __license__ = "http://www.wtfpl.net/"
 
 
-def set_v_print(verbose):
+def process_photos(target_folder, folder, overwrite):
     """
-    Defines the function v_print.
-    It prints if verbose is true, otherwise, it does nothing.
-    See: http://stackoverflow.com/questions/5980042
-    :param verbose: A bool to determine if v_print will print its args.
-    """
-    global v_print
-    if verbose:
-        def v_print(*s):
-            print (" ".join(s))
-    else:
-        v_print = lambda *s: None
-
-
-def process_photos(target_folder, folder, photo_dict, prev_index):
-    """
-    Adds photos to photo_dict if they are newer than prev_index.
+    Copy photos, overwrite if active.
     :param target_folder: local folder where the files are copied to.
     :param folder: The PIDL of the folder to walk.
-    :param photo_dict: A defaultdict of pathname to list of photos.
-    :param prev_index: The index in the filename of the most recent photo
-                       already copied to the local disk
+    :param overwrite: overwrite existing files
     """
     for pidl in folder.EnumObjects(0, shellcon.SHCONTF_NONFOLDERS):
         name = folder.GetDisplayNameOf(pidl, shellcon.SHGDN_FORADDRESSBAR)
         dirname = os.path.dirname(name)
         basename, ext = os.path.splitext(os.path.basename(name))
         # List only the images that are newer.
-        if ext.endswith("JPG") and index_from_filename(name) > prev_index:
-            if not os.path.isfile(os.path.join(target_folder,os.path.split(name)[1])):
+        if ext.endswith("JPG"):
+            if basename.startswith('IMG_E'):
+                logger.warning(f'ignoring {basename}')
+            elif not os.path.isfile(os.path.join(target_folder,os.path.split(name)[1])):
+                logger.info(f'copying {basename}')
                 data = b''
                 for chunk in stream_file_content(folder, pidl):
                     data += chunk
                 open(os.path.join(target_folder,os.path.split(name)[1]),'wb').write(data)
                 #photo_dict[dirname].append(name)
+            else:
+                logger.debug(f'{basename} is not overwritten')
 
 
-def walk_dcim_folder(target_folder, dcim_pidl, parent, prev_index):
+def walk_dcim_folder(target_folder, dcim_pidl, parent, overwrite):
     """
-    Iterates all the subfolders of the iPhone's DCIM directory, gathering
-    photos that need to be processed in photo_dict.
+    Iterates all the subfolders of the iPhone's DCIM directory, copying
+    photos to the target folder.
 
     :param target_folder: local folder where the files are copied to.
     :param dcim_pidl: A PIDL for the iPhone's DCIM folder
     :param parent: The parent folder of the PIDL
-    :param prev_index: The index in the filename of the most recent photo
-                       already copied to the local disk
+    :param overwrite: overwrite existing files
     """
-    photo_dict = defaultdict(list)
     dcim_folder = parent.BindToObject(dcim_pidl, None, shell.IID_IShellFolder)
     for pidl in dcim_folder.EnumObjects(0, shellcon.SHCONTF_FOLDERS):
         folder = dcim_folder.BindToObject(pidl, None, shell.IID_IShellFolder)
-        process_photos(target_folder, folder, photo_dict, prev_index)
+        name = folder.GetDisplayNameOf(pidl, shellcon.SHGDN_FORADDRESSBAR)
+        logger.info(f'working on folder {name}')
+        process_photos(target_folder, folder, overwrite)
 
-    for key in photo_dict:
-        for item in sorted(photo_dict[key]):
-            print (item)
-        print ("")
 
 
 def get_dcim_folder(device_pidl, parent):
@@ -106,61 +91,11 @@ def get_dcim_folder(device_pidl, parent):
         name = folder.GetDisplayNameOf(pidl, shellcon.SHGDN_NORMAL)
         break  # Only want to see the first folder.
     if name != "DCIM":
-        v_print("%s's '%s' has '%s', not a 'DCIM' dir." %
+        logger.warning("%s's '%s' has '%s', not a 'DCIM' dir." %
                 (device_name, top_dir_name, name))
         return None, None, device_name
 
     return pidl, folder, device_name
-
-
-def get_destination_for_phone(localdir, iphone_name):
-    """
-    Read a YAML file that maps a phone's name to a local directory.
-    :param localdir: The directory path to the yaml file.
-    :param iphone_name: The iPhone's name
-    """
-    names = yaml.load(open(os.path.join(localdir, "name-to-path.yaml"), "r"))
-    for k in names:
-        if k in iphone_name.lower():
-            v_print("Local photo directory: %s" % (names[k], ))
-            return names[k]
-    return None
-
-
-def index_from_filename(filename):
-    """
-    Return the index number contained in the basename
-    :param filename: Filename commonly of the form IMG_5555.JPG.
-    """
-    basename, ext = os.path.splitext(filename)
-    basename = basename.upper()
-    ext = ext.upper()
-    if ext == ".TXT":
-        # Maybe it's a special .jpg.txt file.
-        basename, ext = os.path.splitext(basename)
-        if ext == ".JPG":
-            basename = basename[basename.find("IMG_"):]
-    elif ext != ".JPG" or not basename.startswith("IMG_"):
-        return 0
-    return int(basename[4:])
-
-
-def get_prev_image(path):
-    """
-    Return the number in the filename of the most recent image already found
-    in the specified directory.
-    :param path: The path to search.
-    """
-    prev_index = -1
-    for root, dirs, files in os.walk(path):
-        for name in files:
-            index = index_from_filename(name)
-            if prev_index < index:
-                prev_index = index
-
-    v_print("The most recent image already on the computer had index %04d." %
-            prev_index)
-    return prev_index
 
 
 def get_computer_shellfolder():
@@ -183,11 +118,10 @@ def stream_file_content(folder, pidl, buffer_size=8192):
         else:
             break
 
-def main(all_images):
+def main(overwrite_files):
     """
     Find a connected iPhone, and print the paths to images on it.
-    :param all_images: Whether or not to list all images on the phone, or
-                       only those newer than those found on disk.
+    :param overwrite_files: overwrite files
     """
     start_time = time.time()
     localdir = os.path.dirname(__file__)
@@ -198,21 +132,15 @@ def main(all_images):
         # If this is the iPhone, get the PIDL of its DCIM folder.
         dcim_pidl, parent, iphone_name = get_dcim_folder(pidl, computer_folder)
         if dcim_pidl is not None:
-            if all_images:
-                prev_index = -1
-            else:
-                dest = get_destination_for_phone(localdir, iphone_name)
-                prev_index = get_prev_image(dest)
-            walk_dcim_folder(localdir, dcim_pidl, parent, prev_index)
-            break
-    v_print("Done. That took %1.2fs." % (time.time() - start_time))
+            walk_dcim_folder(localdir, dcim_pidl, parent, overwrite_files)
+
+    logger.info("Done. That took %1.2fs." % (time.time() - start_time))
 
 
 if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument("-v", "--verbose", action="store_true")
-    parser.add_argument("-a", "--all", action="store_true")
-    parser.set_defaults(verbose=False, all=False)
+    parser.add_argument("-o", "--overwrite", action="store_true")
     args = parser.parse_args()
-    set_v_print(args.verbose)
-    main(args.all)
+    logger.setLevel(logging.INFO if args.verbose else logging.ERROR)
+    main(args.overwrite)
