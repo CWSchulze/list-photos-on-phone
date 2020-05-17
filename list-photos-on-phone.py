@@ -161,7 +161,7 @@ def get_computer_shellfolder():
     desktop = shell.SHGetDesktopFolder()
     for pidl in desktop.EnumObjects(0, shellcon.SHCONTF_FOLDERS):
         display_name = desktop.GetDisplayNameOf(pidl, shellcon.SHGDN_NORMAL)
-        if display_name in ("Computer", "This PC"):
+        if display_name in ("Computer", "This PC", "Dieser PC"):
             return desktop.BindToObject(pidl, None, shell.IID_IShellFolder)
     return None
 
