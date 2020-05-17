@@ -10,6 +10,8 @@ from win32com.shell import shell, shellcon
 import pywintypes
 from collections import defaultdict
 import yaml
+import pythoncom
+from win32com import storagecon
 
 __author__ = "David Blume"
 __copyright__ = "Copyright 2014, David Blume"
@@ -31,9 +33,10 @@ def set_v_print(verbose):
         v_print = lambda *s: None
 
 
-def process_photos(folder, photo_dict, prev_index):
+def process_photos(target_folder, folder, photo_dict, prev_index):
     """
     Adds photos to photo_dict if they are newer than prev_index.
+    :param target_folder: local folder where the files are copied to.
     :param folder: The PIDL of the folder to walk.
     :param photo_dict: A defaultdict of pathname to list of photos.
     :param prev_index: The index in the filename of the most recent photo
@@ -45,14 +48,20 @@ def process_photos(folder, photo_dict, prev_index):
         basename, ext = os.path.splitext(os.path.basename(name))
         # List only the images that are newer.
         if ext.endswith("JPG") and index_from_filename(name) > prev_index:
-            photo_dict[dirname].append(name)
+            if not os.path.isfile(os.path.join(target_folder,os.path.split(name)[1])):
+                data = b''
+                for chunk in stream_file_content(folder, pidl):
+                    data += chunk
+                open(os.path.join(target_folder,os.path.split(name)[1]),'wb').write(data)
+                #photo_dict[dirname].append(name)
 
 
-def walk_dcim_folder(dcim_pidl, parent, prev_index):
+def walk_dcim_folder(target_folder, dcim_pidl, parent, prev_index):
     """
     Iterates all the subfolders of the iPhone's DCIM directory, gathering
     photos that need to be processed in photo_dict.
 
+    :param target_folder: local folder where the files are copied to.
     :param dcim_pidl: A PIDL for the iPhone's DCIM folder
     :param parent: The parent folder of the PIDL
     :param prev_index: The index in the filename of the most recent photo
@@ -62,7 +71,7 @@ def walk_dcim_folder(dcim_pidl, parent, prev_index):
     dcim_folder = parent.BindToObject(dcim_pidl, None, shell.IID_IShellFolder)
     for pidl in dcim_folder.EnumObjects(0, shellcon.SHCONTF_FOLDERS):
         folder = dcim_folder.BindToObject(pidl, None, shell.IID_IShellFolder)
-        process_photos(folder, photo_dict, prev_index)
+        process_photos(target_folder, folder, photo_dict, prev_index)
 
     for key in photo_dict:
         for item in sorted(photo_dict[key]):
@@ -165,6 +174,14 @@ def get_computer_shellfolder():
             return desktop.BindToObject(pidl, None, shell.IID_IShellFolder)
     return None
 
+def stream_file_content(folder, pidl, buffer_size=8192):
+    istream = folder.BindToStorage(pidl, None, pythoncom.IID_IStream)
+    while True:
+        contents = istream.Read(buffer_size)
+        if contents:
+            yield contents
+        else:
+            break
 
 def main(all_images):
     """
@@ -173,7 +190,7 @@ def main(all_images):
                        only those newer than those found on disk.
     """
     start_time = time.time()
-    localdir = os.path.abspath(os.path.dirname(sys.argv[0]))
+    localdir = os.path.dirname(__file__)
 
     # Find the iPhone in the virtual folder for the local computer.
     computer_folder = get_computer_shellfolder()
@@ -186,7 +203,7 @@ def main(all_images):
             else:
                 dest = get_destination_for_phone(localdir, iphone_name)
                 prev_index = get_prev_image(dest)
-            walk_dcim_folder(dcim_pidl, parent, prev_index)
+            walk_dcim_folder(localdir, dcim_pidl, parent, prev_index)
             break
     v_print("Done. That took %1.2fs." % (time.time() - start_time))
 
