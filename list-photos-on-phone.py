@@ -26,7 +26,7 @@ def set_v_print(verbose):
     global v_print
     if verbose:
         def v_print(*s):
-            print " ".join(s)
+            print (" ".join(s))
     else:
         v_print = lambda *s: None
 
@@ -66,8 +66,8 @@ def walk_dcim_folder(dcim_pidl, parent, prev_index):
 
     for key in photo_dict:
         for item in sorted(photo_dict[key]):
-            print item
-        print
+            print (item)
+        print ("")
 
 
 def get_dcim_folder(device_pidl, parent):
